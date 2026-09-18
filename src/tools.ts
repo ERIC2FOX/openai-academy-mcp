@@ -1,12 +1,20 @@
-import {McpServer} from "@modelcontextprotocol/sdk/server/mcp.js";
-import {z} from "zod";
-import {searchAcademy,openAcademyResource} from "./academy.js";
-import {authenticate,requireScope} from "./auth.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import { AcademyClient } from "./academy.js";
+import { asConnectorError, ConnectorError } from "./errors.js";
 
-const text=(v:unknown)=>({content:[{type:"text" as const,text:JSON.stringify(v,null,2)}]});
-export function registerTools(server:McpServer,request:any){
-  server.registerTool("academy_search",{description:"Busca recursos públicos de OpenAI Academy.",inputSchema:{query:z.string().min(1),type:z.string().default("all")}},async({query,type})=>text(await searchAcademy(query,type)));
-  server.registerTool("academy_open_resource",{description:"Abre un recurso público de OpenAI Academy.",inputSchema:{url:z.string().url()}},async({url})=>text(await openAcademyResource(url)));
-  server.registerTool("academy_profile",{description:"Muestra la identidad autenticada por este MCP; no es el perfil privado de Academy.",inputSchema:{}},async()=>{const ctx=await authenticate(request);requireScope(ctx,"academy:profile");return text({subject:ctx.subject,email:ctx.email,scopes:[...ctx.scopes],note:"Esto autentica contra el proveedor OAuth del MCP, no contra los datos privados de OpenAI Academy."});});
-  server.registerTool("academy_connection_status",{description:"Comprueba si la petición al MCP está autenticada.",inputSchema:{}},async()=>{const ctx=await authenticate(request);return text({authenticated:ctx.authenticated,scopes:[...ctx.scopes]});});
+const toolResult = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] });
+const toolError = (error: unknown) => {
+  const safe = asConnectorError(error);
+  return { content: [{ type: "text" as const, text: JSON.stringify({ error: { code: safe.code, message: safe.message, details: safe.details } }) }], isError: true };
+};
+const run = async (operation: () => Promise<unknown>) => { try { return toolResult(await operation()); } catch (error) { return toolError(error); } };
+
+const topicSchema = z.enum(["codex", "chatgpt", "prompting", "agents", "api", "mcp", "automation"]);
+export function registerTools(server: McpServer, academy: AcademyClient) {
+  server.registerTool("search_academy", { description: "Searches the verified, public OpenAI Academy catalog. It never accesses private Academy data.", inputSchema: { query: z.string().trim().min(1).max(200), topics: z.array(topicSchema).max(7).default([]), limit: z.number().int().min(1).max(50).default(10) } }, async ({ query, topics, limit }) => run(() => academy.search(query, topics, limit)));
+  server.registerTool("get_academy_resource", { description: "Gets readable text and a short extract from a resource in the verified public Academy catalog.", inputSchema: { id_or_url: z.string().trim().min(1).max(2_048) } }, async ({ id_or_url }) => run(() => academy.getResource(id_or_url)));
+  server.registerTool("list_academy_resources", { description: "Lists verified public OpenAI Academy resources, optionally filtered by topic.", inputSchema: { topic: topicSchema.optional(), limit: z.number().int().min(1).max(50).default(20) } }, async ({ topic, limit }) => run(async () => ({ results: (await academy.list()).filter((resource) => !topic || resource.topics.includes(topic)).slice(0, limit) })));
+  server.registerTool("search_academy_topics", { description: "Lists normalized topics represented in the verified public Academy catalog.", inputSchema: {} }, async () => run(async () => ({ topics: await academy.topics() })));
+  server.registerTool("get_academy_learning_path", { description: "Reports whether a public official Academy learning path can be retrieved. This connector does not infer or fabricate learning paths.", inputSchema: { topic: topicSchema } }, async ({ topic }) => run(async () => { throw new ConnectorError("LEARNING_PATHS_NOT_PUBLICLY_AVAILABLE", `No verified public official learning path is available for '${topic}'.`, 404, { topic }); }));
 }
