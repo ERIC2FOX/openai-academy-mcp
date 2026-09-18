@@ -10,4 +10,4 @@ app.get("/.well-known/oauth-protected-resource",(_req,res)=>res.json({resource:`
 app.get("/",(_req,res)=>res.json({service:"openai-academy-mcp",mcp:"/mcp"}));
 app.all("/mcp",async(req,res,next)=>{try{const server=new McpServer({name:"openai-academy-mcp",version:"1.0.0"});registerTools(server,req);const transport=new StreamableHTTPServerTransport({sessionIdGenerator:undefined});await server.connect(transport);await transport.handleRequest(req,res,req.body);}catch(e){next(e)}});
 app.use((err:any,_req:any,res:any,_next:any)=>res.status(err?.status??500).json({error:err?.message??"Internal error"}));
-app.listen(config.port,()=>console.log(`OpenAI Academy MCP listening on ${config.port}`));
+app.listen(config.port,"0.0.0.0",()=>console.log(`OpenAI Academy MCP listening on ${config.port}`));
